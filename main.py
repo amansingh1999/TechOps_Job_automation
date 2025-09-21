@@ -14,6 +14,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 import base64
+import platform
+import logging
 
 # -------- CONFIG -------- #
 TEMPLATE_PATH = "resume_template.docx"
@@ -33,8 +35,17 @@ if EMAIL_TO:
 else:
     EMAIL_TO = []
 
-GMAIL_CREDS_JSON = os.getenv("GMAIL_CREDENTIALS_JSON")
-DRIVE_CREDS_JSON = os.getenv("DRIVE_CREDENTIALS_JSON")
+GMAIL_CREDS_JSON = os.getenv("GMAIL_CREDS_JSON")
+DRIVE_CREDS_JSON = os.getenv("DRIVE_CREDS_JSON")
+
+# -------- LOGGING CONFIG -------- #
+LOG_FILE = "techops_job_log.txt"
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
 # -------- WRITE CREDENTIALS FILES AT RUNTIME -------- #
 if GMAIL_CREDS_JSON:
@@ -61,6 +72,7 @@ def fetch_latest_email():
     messages = results.get('messages', [])
     if not messages:
         print("No new TechOps emails found.")
+        logging.info("No new TechOps emails found.")
         return None
 
     msg = service.users().messages().get(userId='me', id=messages[0]['id'], format='full').execute()
@@ -114,6 +126,7 @@ def parse_remote_jobs(email_text):
         print(f"Detected {len(jobs)} remote job(s):")
         for j in jobs:
             print(f" - {j['title']} at {j['company']} ({j['location']}) Link: {j['link']}")
+        logging.info(f"Detected {len(jobs)} remote job(s).")
     return jobs
 
 # -------- 3. FETCH JOB DESCRIPTION -------- #
@@ -164,10 +177,10 @@ def upload_to_drive(filepath):
     file_drive.Upload()
     return file_drive['alternateLink']
 
-# -------- 7. SEND NOTIFICATIONS -------- #
+# -------- 7. SEND NOTIFICATIONS (Cross-platform safe) -------- #
 def notify(job, resume_path, drive_link=None, error=None):
     subject = f"TechOps Job Alert: {job['title']} at {job['company']}"
-    body = f"""📢 New Remote Job Found
+    body = f"""New Remote Job Found
 Company: {job['company']}
 Role: {job['title']}
 Location: {job['location']}
@@ -176,6 +189,17 @@ Resume: {drive_link if drive_link else resume_path}
 Error: {error if error else 'None'}
 """
 
+    # Platform-safe symbols
+    if platform.system() == "Windows":
+        success_symbol = "[SUCCESS]"
+        fail_symbol = "[FAILED]"
+        warning_symbol = "[WARNING]"
+    else:
+        success_symbol = "\u2705"  # ✅
+        fail_symbol = "\u274c"     # ❌
+        warning_symbol = "\u26A0"  # ⚠️
+
+    # Email
     if EMAIL_TO:
         recipients = EMAIL_TO
         try:
@@ -194,65 +218,18 @@ Error: {error if error else 'None'}
             with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
                 server.login(EMAIL_USER, EMAIL_PASS)
                 server.sendmail(EMAIL_USER, recipients, msg.as_string())
-            print(f"✅ Email sent to: {', '.join(recipients)}")
+
+            print(f"{success_symbol} Email sent to: {', '.join(recipients)}")
+            logging.info(f"Email sent for job '{job['title']}' at '{job['company']}' to {', '.join(recipients)}")
 
         except Exception as e:
-            print(f"❌ Failed to send email: {e}")
+            print(f"{fail_symbol} Failed to send email: {e}")
+            logging.error(f"Failed to send email for job '{job['title']}' at '{job['company']}': {e}")
     else:
-        print("⚠️ No recipient email set; skipping email notification.")
+        print(f"{warning_symbol} No recipient email set; skipping email notification.")
+        logging.warning(f"Skipped email notification for job '{job['title']}' at '{job['company']}' — no recipient set")
 
     # Telegram
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
         try:
             requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                data={"chat_id": TELEGRAM_CHAT_ID, "text": body}
-            )
-            print("✅ Telegram notification sent.")
-        except Exception as e:
-            print(f"❌ Failed to send Telegram notification: {e}")
-
-# -------- MAIN -------- #
-def main():
-    email_text = fetch_latest_email()
-    if not email_text:
-        print("No new TechOps emails found.")
-        return
-
-    jobs = parse_remote_jobs(email_text)
-    if not jobs:
-        print("No remote jobs found in email.")
-        return
-
-    processed_count = 0
-
-    for job in jobs:
-        jd_text, error = None, None
-        resume_path, drive_link = None, None
-
-        if job.get('link'):
-            jd_text, error = fetch_jd(job['link'])
-
-        if jd_text:
-            keywords = extract_keywords(jd_text)
-            resume_path = generate_resume(job['title'], job['company'], keywords)
-            try:
-                drive_link = upload_to_drive(resume_path)
-            except Exception as e:
-                print(f"⚠️ Failed to upload to Drive: {e}")
-                drive_link = None
-        else:
-            keywords = ["DevOps", "Cloud", "CI/CD", "Linux"]
-            resume_path = generate_resume(job['title'], job['company'], keywords)
-
-        if EMAIL_TO:
-            notify(job, resume_path, drive_link, error)
-        else:
-            print(f"⚠️ Skipping notification for job '{job['title']}' at '{job['company']}' — no recipient set.")
-
-        processed_count += 1
-
-    print(f"✅ Processed {processed_count} job(s) successfully.")
-
-if __name__ == "__main__":
-    main()
