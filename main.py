@@ -75,7 +75,6 @@ def fetch_latest_email():
 
 # -------- 2. PARSE REMOTE JOBS (FIXED) -------- #
 def parse_remote_jobs(email_text):
-    # Convert HTML to plain text
     soup = BeautifulSoup(email_text, "html.parser")
     text = soup.get_text(separator="\n")
 
@@ -123,3 +122,105 @@ def fetch_jd(url):
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
             return None, "Login required or page inaccessible"
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+        jd_div = soup.find('div', class_='job-description') or soup.find('div', id='job-desc')
+        if not jd_div:
+            return None, "Job description not found"
+
+        jd_text = jd_div.get_text(separator="\n")
+        return jd_text, None
+
+    except Exception as e:
+        return None, str(e)
+
+# -------- 4. EXTRACT KEYWORDS -------- #
+def extract_keywords(jd_text):
+    skills_list = ["AWS", "Azure", "Terraform", "Kubernetes", "Docker", "CI/CD", "Jenkins", "Python", "Ansible"]
+    return [skill for skill in skills_list if skill.lower() in jd_text.lower()]
+
+# -------- 5. GENERATE ATS RESUME -------- #
+def generate_resume(job_title, company, keywords):
+    doc = Document(TEMPLATE_PATH)
+    for p in doc.paragraphs:
+        if "[SKILLS_PLACEHOLDER]" in p.text:
+            p.text = ", ".join(keywords)
+        if "[EXP_PLACEHOLDER]" in p.text:
+            p.text = f"Experience working with {', '.join(keywords)} in DevOps, cloud, and CI/CD projects."
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    filename = f"{OUTPUT_DIR}/{company}_{job_title.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.docx"
+    doc.save(filename)
+    return filename
+
+# -------- 6. UPLOAD TO GOOGLE DRIVE -------- #
+def upload_to_drive(filepath):
+    gauth = GoogleAuth()
+    gauth.LoadClientConfigFile("credentials_drive.json")
+    gauth.LocalWebserverAuth()
+    drive = GoogleDrive(gauth)
+    file_drive = drive.CreateFile({'title': os.path.basename(filepath)})
+    file_drive.SetContentFile(filepath)
+    file_drive.Upload()
+    return file_drive['alternateLink']
+
+# -------- 7. SEND NOTIFICATIONS -------- #
+def notify(job, resume_path, drive_link=None, error=None):
+    subject = f"TechOps Job Alert: {job['title']} at {job['company']}"
+    body = f"""📢 New Remote Job Found
+Company: {job['company']}
+Role: {job['title']}
+Location: {job['location']}
+Job Link: {job.get('link','N/A')}
+Resume: {drive_link if drive_link else resume_path}
+Error: {error if error else 'None'}
+"""
+
+    # Email
+    msg = MIMEMultipart()
+    msg['From'], msg['To'], msg['Subject'] = EMAIL_USER, EMAIL_TO, subject
+    msg.attach(MIMEText(body, 'plain'))
+    if resume_path and os.path.exists(resume_path):
+        with open(resume_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(resume_path))
+            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(resume_path)}"'
+            msg.attach(part)
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
+
+    # Telegram
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                      data={"chat_id": TELEGRAM_CHAT_ID, "text": body})
+
+# -------- MAIN -------- #
+def main():
+    email_text = fetch_latest_email()
+    if not email_text:
+        return
+
+    jobs = parse_remote_jobs(email_text)
+    if not jobs:
+        print("No remote jobs found in email.")
+        return
+
+    for job in jobs:
+        jd_text, error = None, None
+        if job.get('link'):
+            jd_text, error = fetch_jd(job['link'])
+
+        if jd_text:
+            keywords = extract_keywords(jd_text)
+            resume_path = generate_resume(job['title'], job['company'], keywords)
+            drive_link = upload_to_drive(resume_path)
+            notify(job, resume_path, drive_link)
+        else:
+            # Generic resume if JD not available
+            keywords = ["DevOps", "Cloud", "CI/CD", "Linux"]
+            resume_path = generate_resume(job['title'], job['company'], keywords)
+            notify(job, resume_path, error=error)
+
+    print(f"Processed {len(jobs)} jobs successfully.")
+
+if __name__ == "__main__":
+    main()
