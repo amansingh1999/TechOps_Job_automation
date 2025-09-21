@@ -13,17 +13,32 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+import base64
 
 # -------- CONFIG -------- #
 TEMPLATE_PATH = "resume_template.docx"
 OUTPUT_DIR = "output"
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
+# Secrets from environment (GitHub Actions)
 EMAIL_USER = os.getenv("EMAIL_USER")
 EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# GitHub Secrets for credentials JSON
+GMAIL_CREDS_JSON = os.getenv("GMAIL_CREDENTIALS_JSON")
+DRIVE_CREDS_JSON = os.getenv("DRIVE_CREDENTIALS_JSON")
+
+# -------- WRITE CREDENTIALS FILES AT RUNTIME -------- #
+if GMAIL_CREDS_JSON:
+    with open("credentials_gmail.json", "w") as f:
+        f.write(GMAIL_CREDS_JSON)
+
+if DRIVE_CREDS_JSON:
+    with open("credentials_drive.json", "w") as f:
+        f.write(DRIVE_CREDS_JSON)
 
 # -------- 1. FETCH LATEST TECHOPS EMAIL -------- #
 def fetch_latest_email():
@@ -55,13 +70,11 @@ def fetch_latest_email():
     else:
         body_data = payload['body']['data']
 
-    import base64
     email_text = base64.urlsafe_b64decode(body_data).decode()
     return email_text
 
 # -------- 2. PARSE REMOTE JOBS -------- #
 def parse_remote_jobs(email_text):
-    # Matches: "Company is hiring a Job Title\n\nRemote Location: Worldwide"
     pattern = r"(.*?) is hiring a (.*?)\n\nRemote Location: (.*)"
     matches = re.findall(pattern, email_text)
     jobs = []
@@ -70,11 +83,11 @@ def parse_remote_jobs(email_text):
             "company": company.strip(),
             "title": title.strip(),
             "location": location.strip(),
-            "link": None  # Optional: Extract from email if hyperlink exists
+            "link": None  # Optional: extract from email if hyperlink exists
         })
     return jobs
 
-# -------- 3. FETCH JOB DESCRIPTION FROM URL -------- #
+# -------- 3. FETCH JOB DESCRIPTION -------- #
 def fetch_jd(url):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -91,7 +104,7 @@ def fetch_jd(url):
     except Exception as e:
         return None, str(e)
 
-# -------- 4. EXTRACT KEYWORDS FROM JD -------- #
+# -------- 4. EXTRACT KEYWORDS -------- #
 def extract_keywords(jd_text):
     skills_list = ["AWS", "Azure", "Terraform", "Kubernetes", "Docker", "CI/CD", "Jenkins", "Python", "Ansible"]
     return [skill for skill in skills_list if skill.lower() in jd_text.lower()]
@@ -147,7 +160,6 @@ Error: {error if error else 'None'}
 
     # Telegram
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        import requests
         requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                       data={"chat_id": TELEGRAM_CHAT_ID, "text": body})
 
@@ -163,20 +175,21 @@ def main():
         return
 
     for job in jobs:
-        # Optional: if job link exists, fetch JD
         jd_text, error = None, None
         if job.get('link'):
             jd_text, error = fetch_jd(job['link'])
+
         if jd_text:
             keywords = extract_keywords(jd_text)
             resume_path = generate_resume(job['title'], job['company'], keywords)
             drive_link = upload_to_drive(resume_path)
             notify(job, resume_path, drive_link)
         else:
-            # Generate generic resume if JD not available
+            # Generic resume if JD not available
             keywords = ["DevOps", "Cloud", "CI/CD", "Linux"]
             resume_path = generate_resume(job['title'], job['company'], keywords)
             notify(job, resume_path, error=error)
+
     print(f"Processed {len(jobs)} jobs successfully.")
 
 if __name__ == "__main__":
