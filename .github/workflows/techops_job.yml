@@ -34,3 +34,5 @@ jobs:
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_CREDENTIALS_JSON: ${{ secrets.GMAIL_CREDENTIALS_JSON }}
+          DRIVE_CREDENTIALS_JSON: ${{ secrets.DRIVE_CREDENTIALS_JSON }}
