@@ -1,0 +1,36 @@
+name: TechOps Job Automation
+
+on:
+  schedule:
+    # 14:00 UTC = 7:30 PM IST
+    - cron: "0 14 * * *"
+  workflow_dispatch:  # Optional: allows manual trigger
+
+jobs:
+  run-automation:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repo
+      - uses: actions/checkout@v3
+
+      # Step 2: Set up Python
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      # Step 3: Install dependencies
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Run main.py
+      - name: Run TechOps Job Script
+        run: python main.py
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
