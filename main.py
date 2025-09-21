@@ -20,14 +20,19 @@ TEMPLATE_PATH = "resume_template.docx"
 OUTPUT_DIR = "output"
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
-# Secrets from environment (GitHub Actions)
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
+# Secrets from environment (GitHub Actions or local env)
+EMAIL_USER = os.getenv("EMAIL_USER")  # Your Gmail
+EMAIL_PASS = os.getenv("EMAIL_PASS")  # 16-char App Password
+EMAIL_TO = os.getenv("EMAIL_TO") or "your.email@example.com"  # fallback recipient
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# GitHub Secrets for credentials JSON
+# Make EMAIL_TO a list if multiple recipients
+if EMAIL_TO:
+    EMAIL_TO = [e.strip() for e in EMAIL_TO.split(",")]
+else:
+    EMAIL_TO = []
+
 GMAIL_CREDS_JSON = os.getenv("GMAIL_CREDENTIALS_JSON")
 DRIVE_CREDS_JSON = os.getenv("DRIVE_CREDENTIALS_JSON")
 
@@ -73,7 +78,7 @@ def fetch_latest_email():
     email_text = base64.urlsafe_b64decode(body_data).decode()
     return email_text
 
-# -------- 2. PARSE REMOTE JOBS (FIXED) -------- #
+# -------- 2. PARSE REMOTE JOBS -------- #
 def parse_remote_jobs(email_text):
     soup = BeautifulSoup(email_text, "html.parser")
     text = soup.get_text(separator="\n")
@@ -84,7 +89,6 @@ def parse_remote_jobs(email_text):
     for i, line in enumerate(lines):
         if "hiring" in line.lower():
             job = {}
-            # Extract company and title
             m = re.match(r"(.*?) is hiring (a|an)? ?(.*)", line, re.IGNORECASE)
             if m:
                 job['company'] = m.group(1).strip()
@@ -93,14 +97,12 @@ def parse_remote_jobs(email_text):
                 job['company'] = "Unknown"
                 job['title'] = line
 
-            # Look ahead for remote location
             job['location'] = "Remote"
             for j in range(i + 1, min(i + 5, len(lines))):
                 if "remote" in lines[j].lower():
                     job['location'] = lines[j]
                     break
 
-            # Optional: extract URL
             job['link'] = None
             url_match = re.search(r'(https?://\S+)', line)
             if url_match:
@@ -108,7 +110,6 @@ def parse_remote_jobs(email_text):
 
             jobs.append(job)
 
-    # Debug: print found jobs
     if jobs:
         print(f"Detected {len(jobs)} remote job(s):")
         for j in jobs:
@@ -175,28 +176,47 @@ Resume: {drive_link if drive_link else resume_path}
 Error: {error if error else 'None'}
 """
 
-    # Email
-    msg = MIMEMultipart()
-    msg['From'], msg['To'], msg['Subject'] = EMAIL_USER, EMAIL_TO, subject
-    msg.attach(MIMEText(body, 'plain'))
-    if resume_path and os.path.exists(resume_path):
-        with open(resume_path, "rb") as f:
-            part = MIMEApplication(f.read(), Name=os.path.basename(resume_path))
-            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(resume_path)}"'
-            msg.attach(part)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.sendmail(EMAIL_USER, EMAIL_TO, msg.as_string())
+    if EMAIL_TO:
+        recipients = EMAIL_TO
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = EMAIL_USER
+            msg['To'] = ", ".join(recipients)
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body, 'plain'))
+
+            if resume_path and os.path.exists(resume_path):
+                with open(resume_path, "rb") as f:
+                    part = MIMEApplication(f.read(), Name=os.path.basename(resume_path))
+                    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(resume_path)}"'
+                    msg.attach(part)
+
+            with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                server.login(EMAIL_USER, EMAIL_PASS)
+                server.sendmail(EMAIL_USER, recipients, msg.as_string())
+            print(f"✅ Email sent to: {', '.join(recipients)}")
+
+        except Exception as e:
+            print(f"❌ Failed to send email: {e}")
+    else:
+        print("⚠️ No recipient email set; skipping email notification.")
 
     # Telegram
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                      data={"chat_id": TELEGRAM_CHAT_ID, "text": body})
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                data={"chat_id": TELEGRAM_CHAT_ID, "text": body}
+            )
+            print("✅ Telegram notification sent.")
+        except Exception as e:
+            print(f"❌ Failed to send Telegram notification: {e}")
 
 # -------- MAIN -------- #
 def main():
     email_text = fetch_latest_email()
     if not email_text:
+        print("No new TechOps emails found.")
         return
 
     jobs = parse_remote_jobs(email_text)
@@ -204,23 +224,35 @@ def main():
         print("No remote jobs found in email.")
         return
 
+    processed_count = 0
+
     for job in jobs:
         jd_text, error = None, None
+        resume_path, drive_link = None, None
+
         if job.get('link'):
             jd_text, error = fetch_jd(job['link'])
 
         if jd_text:
             keywords = extract_keywords(jd_text)
             resume_path = generate_resume(job['title'], job['company'], keywords)
-            drive_link = upload_to_drive(resume_path)
-            notify(job, resume_path, drive_link)
+            try:
+                drive_link = upload_to_drive(resume_path)
+            except Exception as e:
+                print(f"⚠️ Failed to upload to Drive: {e}")
+                drive_link = None
         else:
-            # Generic resume if JD not available
             keywords = ["DevOps", "Cloud", "CI/CD", "Linux"]
             resume_path = generate_resume(job['title'], job['company'], keywords)
-            notify(job, resume_path, error=error)
 
-    print(f"Processed {len(jobs)} jobs successfully.")
+        if EMAIL_TO:
+            notify(job, resume_path, drive_link, error)
+        else:
+            print(f"⚠️ Skipping notification for job '{job['title']}' at '{job['company']}' — no recipient set.")
+
+        processed_count += 1
+
+    print(f"✅ Processed {processed_count} job(s) successfully.")
 
 if __name__ == "__main__":
     main()
