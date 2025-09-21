@@ -230,6 +230,14 @@ Error: {error if error else 'None'}
         logging.warning(f"Skipped email notification for job '{job['title']}' at '{job['company']}' — no recipient set")
 
     # Telegram
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            requests.post(
+if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": body}
+        )
+        print(f"{success_symbol} Telegram notification sent.")
+        logging.info(f"Telegram notification sent for job '{job['title']}' at '{job['company']}'")
+    except Exception as e:
+        print(f"{fail_symbol} Failed to send Telegram notification: {e}")
+        logging.error(f"Failed Telegram notification for job '{job['title']}' at '{job['company']}': {e}")
