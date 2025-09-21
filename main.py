@@ -122,4 +122,4 @@ def fetch_jd(url):
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
-            return None, "Login req
+            return None, "Login required or page inaccessible"
