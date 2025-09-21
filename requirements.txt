@@ -3,4 +3,5 @@ google-auth
 google-auth-oauthlib
 pydrive
 requests
+beautifulsoup4
 python-docx
